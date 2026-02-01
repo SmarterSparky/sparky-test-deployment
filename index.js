@@ -48,6 +48,7 @@ app.get('/', (req, res) => {
                 <strong>✅ Status:</strong> Docker + GitHub + Hostinger = Success!
             </div>
             <p><small>Deployed at: ${new Date().toISOString()}</small></p>
+            <p><small>Build: SSH key updated ✨</small></p>
         </div>
     </body>
     </html>
