@@ -58,7 +58,17 @@ jobs:
       run: |
         docker save $IMAGE_NAME:latest | gzip > deployment-image.tar.gz
     
-    - name: Deploy to Hostinger via SSH
+    - name: Deploy Docker container to server
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.HOSTINGER_HOST }}
+        username: ${{ secrets.HOSTINGER_USER }}
+        key: ${{ secrets.HOSTINGER_SSH_KEY }}
+        port: ${{ secrets.HOSTINGER_PORT || 22 }}
+        source: "deployment-image.tar.gz"
+        target: "/tmp/"
+
+    - name: Load and start Docker container
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.HOSTINGER_HOST }}
@@ -70,65 +80,41 @@ jobs:
           echo "🚀 Starting deployment..."
           echo "Host: $(hostname)"
           echo "User: $(whoami)"
-          echo "Docker version: $(docker --version || echo 'Docker not found')"
+          echo "Docker version: $(docker --version)"
           
-          # Create app directory
-          mkdir -p ~/apps/$CONTAINER_NAME
-          cd ~/apps/$CONTAINER_NAME
+          # Define variables
+          IMAGE_NAME="sparky-test-deployment"
+          CONTAINER_NAME="sparky-test-app"
           
           # Stop existing container if running
-          if [ "$(docker ps -q -f name=$CONTAINER_NAME)" ]; then
+          if [ "$(docker ps -q -f name=${CONTAINER_NAME})" ]; then
             echo "⏹️  Stopping existing container..."
-            docker stop $CONTAINER_NAME
+            docker stop ${CONTAINER_NAME}
           fi
           
           # Remove existing container
-          if [ "$(docker ps -aq -f name=$CONTAINER_NAME)" ]; then
+          if [ "$(docker ps -aq -f name=${CONTAINER_NAME})" ]; then
             echo "🗑️  Removing old container..."
-            docker rm $CONTAINER_NAME
+            docker rm ${CONTAINER_NAME}
           fi
           
           # Remove old image
-          if [ "$(docker images -q $IMAGE_NAME:latest)" ]; then
+          if [ "$(docker images -q ${IMAGE_NAME}:latest)" ]; then
             echo "🗑️  Removing old image..."
-            docker rmi $IMAGE_NAME:latest
+            docker rmi ${IMAGE_NAME}:latest
           fi
-    
-    - name: Copy Docker image to server
-      uses: appleboy/scp-action@v0.1.7
-      with:
-        host: ${{ secrets.HOSTINGER_HOST }}
-        username: ${{ secrets.HOSTINGER_USER }}
-        key: ${{ secrets.HOSTINGER_SSH_KEY }}
-        port: ${{ secrets.HOSTINGER_PORT || 22 }}
-        source: "deployment-image.tar.gz"
-        target: "~/apps/${{ env.CONTAINER_NAME }}/"
-    
-    - name: Load and start Docker container
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.HOSTINGER_HOST }}
-        username: ${{ secrets.HOSTINGER_USER }}
-        key: ${{ secrets.HOSTINGER_SSH_KEY }}
-        port: ${{ secrets.HOSTINGER_PORT || 22 }}
-        script: |
-          cd ~/apps/$CONTAINER_NAME
           
           # Load new image
           echo "📦 Loading Docker image..."
-          docker load < deployment-image.tar.gz
+          docker load < /tmp/deployment-image.tar.gz
           
           # Start new container
           echo "🏃 Starting new container..."
-          docker run -d \
-            --name $CONTAINER_NAME \
-            --restart unless-stopped \
-            -p 3000:3000 \
-            $IMAGE_NAME:latest
+          docker run -d --name ${CONTAINER_NAME} --restart unless-stopped -p 3000:3000 ${IMAGE_NAME}:latest
           
           # Wait for container to be ready
           echo "⏳ Waiting for container to start..."
-          sleep 15
+          sleep 20
           
           # Health check
           if curl -f http://localhost:3000/api/health; then
@@ -136,12 +122,12 @@ jobs:
             echo "🌍 Application is running at: http://${{ secrets.HOSTINGER_HOST }}:3000"
           else
             echo "❌ Health check failed!"
-            docker logs $CONTAINER_NAME
+            docker logs ${CONTAINER_NAME}
             exit 1
           fi
           
           # Cleanup
-          rm deployment-image.tar.gz
+          rm /tmp/deployment-image.tar.gz
           
           echo "🎉 Deployment completed successfully!"
 
