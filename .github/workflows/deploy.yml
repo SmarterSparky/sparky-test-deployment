@@ -65,8 +65,12 @@ jobs:
         username: ${{ secrets.HOSTINGER_USER }}
         key: ${{ secrets.HOSTINGER_SSH_KEY }}
         port: ${{ secrets.HOSTINGER_PORT || 22 }}
+        debug: true
         script: |
           echo "🚀 Starting deployment..."
+          echo "Host: $(hostname)"
+          echo "User: $(whoami)"
+          echo "Docker version: $(docker --version || echo 'Docker not found')"
           
           # Create app directory
           mkdir -p ~/apps/$CONTAINER_NAME
