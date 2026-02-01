@@ -1,0 +1,158 @@
+name: 🚀 Deploy to Hostinger
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+env:
+  IMAGE_NAME: sparky-test-deployment
+  CONTAINER_NAME: sparky-test-app
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: 🧪 Test Application
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Test Docker build
+      run: docker build -t $IMAGE_NAME:test .
+    
+    - name: Test Docker run
+      run: |
+        docker run -d -p 3000:3000 --name test-container $IMAGE_NAME:test
+        sleep 10
+        curl -f http://localhost:3000/api/health || exit 1
+        docker stop test-container
+        docker rm test-container
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    name: 🌐 Deploy to Production
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Build Docker image
+      run: |
+        docker build -t $IMAGE_NAME:latest .
+        docker tag $IMAGE_NAME:latest $IMAGE_NAME:${{ github.sha }}
+    
+    - name: Save Docker image
+      run: |
+        docker save $IMAGE_NAME:latest | gzip > deployment-image.tar.gz
+    
+    - name: Deploy to Hostinger via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.HOSTINGER_HOST }}
+        username: ${{ secrets.HOSTINGER_USER }}
+        key: ${{ secrets.HOSTINGER_SSH_KEY }}
+        port: ${{ secrets.HOSTINGER_PORT || 22 }}
+        script: |
+          echo "🚀 Starting deployment..."
+          
+          # Create app directory
+          mkdir -p ~/apps/$CONTAINER_NAME
+          cd ~/apps/$CONTAINER_NAME
+          
+          # Stop existing container if running
+          if [ "$(docker ps -q -f name=$CONTAINER_NAME)" ]; then
+            echo "⏹️  Stopping existing container..."
+            docker stop $CONTAINER_NAME
+          fi
+          
+          # Remove existing container
+          if [ "$(docker ps -aq -f name=$CONTAINER_NAME)" ]; then
+            echo "🗑️  Removing old container..."
+            docker rm $CONTAINER_NAME
+          fi
+          
+          # Remove old image
+          if [ "$(docker images -q $IMAGE_NAME:latest)" ]; then
+            echo "🗑️  Removing old image..."
+            docker rmi $IMAGE_NAME:latest
+          fi
+    
+    - name: Copy Docker image to server
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.HOSTINGER_HOST }}
+        username: ${{ secrets.HOSTINGER_USER }}
+        key: ${{ secrets.HOSTINGER_SSH_KEY }}
+        port: ${{ secrets.HOSTINGER_PORT || 22 }}
+        source: "deployment-image.tar.gz"
+        target: "~/apps/${{ env.CONTAINER_NAME }}/"
+    
+    - name: Load and start Docker container
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.HOSTINGER_HOST }}
+        username: ${{ secrets.HOSTINGER_USER }}
+        key: ${{ secrets.HOSTINGER_SSH_KEY }}
+        port: ${{ secrets.HOSTINGER_PORT || 22 }}
+        script: |
+          cd ~/apps/$CONTAINER_NAME
+          
+          # Load new image
+          echo "📦 Loading Docker image..."
+          docker load < deployment-image.tar.gz
+          
+          # Start new container
+          echo "🏃 Starting new container..."
+          docker run -d \
+            --name $CONTAINER_NAME \
+            --restart unless-stopped \
+            -p 3000:3000 \
+            $IMAGE_NAME:latest
+          
+          # Wait for container to be ready
+          echo "⏳ Waiting for container to start..."
+          sleep 15
+          
+          # Health check
+          if curl -f http://localhost:3000/api/health; then
+            echo "✅ Deployment successful!"
+            echo "🌍 Application is running at: http://${{ secrets.HOSTINGER_HOST }}:3000"
+          else
+            echo "❌ Health check failed!"
+            docker logs $CONTAINER_NAME
+            exit 1
+          fi
+          
+          # Cleanup
+          rm deployment-image.tar.gz
+          
+          echo "🎉 Deployment completed successfully!"
+
+  notify:
+    needs: [test, deploy]
+    runs-on: ubuntu-latest
+    name: 📬 Notify Results
+    if: always()
+    
+    steps:
+    - name: Deployment Status
+      run: |
+        if [ "${{ needs.deploy.result }}" == "success" ]; then
+          echo "🎉 Deployment successful!"
+        else
+          echo "❌ Deployment failed!"
+          exit 1
+        fi
